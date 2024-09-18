@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@aptos-labs/aptos-processor-sdk": "=0.2.0",
+    "colorette": "^2.0.20",
     "commander": "^11.0.0",
     "dotenv": "^16.4.5",
     "pg": "^8.11.3",

@@ -2,8 +2,8 @@ import { Entity, PrimaryColumn, Column } from "typeorm";
 
 import { CommonBase } from "./common";
 
-@Entity("coin_flip_events")
-export class CoinFlipEvent extends CommonBase {
+@Entity("generic_coin_flip_events")
+export class GenericCoinFlipEvent extends CommonBase {
   @PrimaryColumn({ type: "bigint" })
   sequenceNumber!: string;
 
@@ -39,8 +39,8 @@ export class CoinFlipEvent extends CommonBase {
   eventIndex!: string;
 }
 
-@Entity("coin_flip_stats")
-export class CoinFlipStat extends CommonBase {
+@Entity("generic_coin_flip_stats")
+export class GenericCoinFlipStat extends CommonBase {
   @Column({ type: "bigint" })
   totalWins!: string;
 

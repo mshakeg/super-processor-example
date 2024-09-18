@@ -11,6 +11,9 @@ importers:
       '@aptos-labs/aptos-processor-sdk':
         specifier: '=0.2.0'
         version: 0.2.0(pg@8.11.3)(ts-node@10.9.1(@types/node@18.17.13)(typescript@4.8.4))
+      colorette:
+        specifier: ^2.0.20
+        version: 2.0.20
       commander:
         specifier: ^11.0.0
         version: 11.0.0

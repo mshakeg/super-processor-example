@@ -6,18 +6,7 @@ import { ICoprocessor } from "../interfaces";
 
 import { CoinFlipEvent, CoinFlipStat } from "../../models/coin-flip";
 import { SupportedAptosChainIds } from "../../common/chains";
-
-interface ChainConfig {
-  modulePublisher: string;
-  genesisVersion: bigint;
-}
-
-const CHAIN_CONFIGS: Partial<Record<SupportedAptosChainIds, ChainConfig>> = {
-  [SupportedAptosChainIds.APTOS_TESTNET]: {
-    modulePublisher: "0xe57752173bc7c57e9b61c84895a75e53cd7c0ef0855acd81d31cb39b0e87e1d0",
-    genesisVersion: 635_567_537n,
-  },
-};
+import { CHAIN_CONFIGS } from "./config";
 
 export class CoinFlipProcessor extends ICoprocessor {
   private COIN_FLIP_MODULE_PUBLISHER: string;
@@ -31,6 +20,7 @@ export class CoinFlipProcessor extends ICoprocessor {
     }
     this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
     this.genesisVersion = config.genesisVersion;
+    this.models = [CoinFlipEvent, CoinFlipStat];
   }
 
   // NOTE: this should be fixed and remain unchanged
@@ -161,11 +151,5 @@ export class CoinFlipProcessor extends ICoprocessor {
       moduleName === "coin_flip" &&
       eventName === "CoinFlipEvent"
     );
-  }
-
-  public loadModels() {
-    if (this.models.length === 0) {
-      this.models = [CoinFlipEvent, CoinFlipStat];
-    }
   }
 }

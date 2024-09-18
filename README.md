@@ -10,6 +10,8 @@ This super indexer example demonstrates how the above can be achieved. It works 
 
 The above is basically all that's required by the developer. The `ProcessorManager` will then sync a `ICoprocessor` up to the version that the `SuperProcessor` is synced if it hasn't already, and once all are synced it will then use the `SuperProcessor` stream to service all coprocessors in lock step.
 
+NOTE: developers can create a custom coprocessor that extends the `GenericProcessor`(which in turn extends the `ICoprocessor`) for a more subgraph like developer experience where developers simply have to specify the specific module events they want to handle, and then simply implement handler functions for those specified module events. See the `GenericCoinFlipProcessor` in `./src/processors/coprocessors/generic-coin-flip.ts` for an example of this. `GenericCoinFlipProcessor` is equivalent to `CoinFlipProcessor` regarding the data that is effectively indexed and aggregated. However for use cases/dApps where high throughput performance is critical then developers should probably implement a coprocessor that extends `ICoprocessor` directly as this more easily allows for simple and efficient batching over many events present in a batch of `transactions` passed to `processTransactions`. `GenericProcessor` could be improved in future to more easily enable batching and efficient DB IO using a Unit of Work pattern across all events(and across all event handlers) present in a batch of `transactions` passed to `processTransactions`.
+
 ## Prerequisites
 
 - `pnpm`: The code is tested with pnpm 8.6.2. Later versions should work too.
@@ -46,24 +48,3 @@ You may have to start up the postgres db, to do so you can use the `pg:start` sc
 ```shell
 chmod +x ./scripts/setup-database.sh
 ```
-
-## Explanation
-
-This example provides a basic processor that extracts events from user transactions and logs them.
-
-When creating a custom processor, the two main things you need to define are:
-
-- Processor: How you process the data from the transactions.
-- Models: How you store the data you extract from the transactions.
-
-These are defined in `processor.ts` and `models.ts` respectively.
-
-The SDK handles the rest:
-
-- Connecting to the Transaction Stream Service.
-- Creating tables in the database.
-- Validating the chain ID.
-- Keeping track of the last processed transaction.
-- Storing the data from your `processTransactions` function in the database.
-
-In `processor.ts`, we have implemented a `processTransactions` function which accepts a `Transaction[]` as a parameter. The example code shows how to implement custom filtering and how to extract `Events` from a `Transaction`. The function returns a list of event objects that the SDK will add to the database for us.

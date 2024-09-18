@@ -1,4 +1,4 @@
-import { parseUnderscoreNumber } from "../utils/formatting";
+import { parseUnderscoreNumber } from "./formatting";
 import { SUPPORTED_APTOS_CHAIN_IDS, SupportedAptosChainIds } from "./chains";
 
 const genesisVersionBase = "GENESIS_VERSION_";

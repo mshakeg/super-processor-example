@@ -16,6 +16,7 @@ export abstract class ISuperProcessor extends TransactionsProcessor {
 
   public static actuallySuperProcessing = false;
 
+  // TODO: consider making this readonly and initialized in the constructor
   public static genesisVersion = -1n; // NOTE: should be set to the config.yaml's starting_version
 
   public static readyToSuperProcess() {
@@ -26,11 +27,11 @@ export abstract class ISuperProcessor extends TransactionsProcessor {
 export abstract class ICoprocessor extends TransactionsProcessor {
   // - - - Singleton to all Coprocessors - - -
 
-  public static SYNCED_TO_SUPER_ERROR = "SYNCED_TO_SUPER_ERROR";
+  public static readonly SYNCED_TO_SUPER_ERROR = "SYNCED_TO_SUPER_ERROR";
 
   // - - - Specifc to a given Coprocessor - - -
 
-  public chainId: SupportedAptosChainIds;
+  public readonly chainId: SupportedAptosChainIds;
 
   constructor(chainId: SupportedAptosChainIds) {
     super();
@@ -100,8 +101,6 @@ export abstract class ICoprocessor extends TransactionsProcessor {
     };
   }
 
-  abstract loadModels(): void;
-
   protected preProcessTransactions(params: {
     transactions: protos.aptos.transaction.v1.Transaction[];
     startVersion: bigint;
@@ -169,6 +168,127 @@ export abstract class IProcessorManager {
   public static coprocessors: ICoprocessor[];
 
   // - - - Used Internally - - -
-  public static staleConfig: Config;
+  public static staleConfig?: Config;
   public static coreConfig: CoreConfig;
+}
+
+export interface BaseEventData {
+  [key: string]: unknown;
+}
+
+export interface AptosTransaction {
+  version: bigint;
+  blockHeight: bigint;
+  timestamp: bigint; // in unix seconds
+}
+
+export interface AptosEventID {
+  moduleAddress: string;
+  moduleName: string;
+  eventName: string;
+}
+
+export interface AptosEvent {
+  id: AptosEventID;
+  sequenceNumber: bigint;
+  creationNumber: bigint;
+  accountAddress: string;
+  eventIndex: number;
+  // EventHandler function should specify the extended AptosEvent for additional type safety
+  // on custom event "data", which we're guaranteed to be an object
+  data: BaseEventData;
+}
+
+type EventHandler<T extends AptosEvent = AptosEvent> = (
+  aptosTx: AptosTransaction,
+  event: T,
+  dataSource: DataSource,
+) => Promise<void>;
+
+class EventHandlerRegistry {
+  private handlers: Map<string, EventHandler<AptosEvent>> = new Map();
+
+  registerHandler<T extends AptosEvent>(eventID: AptosEventID, handler: EventHandler<T>) {
+    const key = this.getEventKey(eventID);
+    this.handlers.set(key, handler as EventHandler<AptosEvent>);
+  }
+
+  // NOTE: will only execute a handler for a uniquely IDed event(address::module::event) if a handler exists for it
+  async handleEvent(
+    aptosTx: AptosTransaction,
+    rawEvent: protos.aptos.transaction.v1.Event,
+    eventIndex: number,
+    dataSource: DataSource,
+  ): Promise<void> {
+    const eventID = this.getEventID(rawEvent);
+    const eventKey = this.getEventKey(eventID);
+    const handler = this.handlers.get(eventKey);
+    if (handler) {
+      const aptosEvent = this.parseEvent(eventID, rawEvent, eventIndex);
+      await handler(aptosTx, aptosEvent, dataSource);
+    }
+    // NOTE: logging on every event that does not have an event handler would be too verbose
+  }
+
+  private getEventID(rawEvent: protos.aptos.transaction.v1.Event): AptosEventID {
+    const [moduleAddress, moduleName, eventName] = rawEvent.typeStr!.split("::");
+    const standardizedModuleAddress = `0x${moduleAddress.slice(2).padStart(64, "0")}`;
+    return {
+      moduleAddress: standardizedModuleAddress,
+      moduleName,
+      eventName,
+    };
+  }
+
+  private getEventKey(eventID: AptosEventID): string {
+    return `${eventID.moduleAddress}::${eventID.moduleName}::${eventID.eventName}`;
+  }
+
+  private parseEvent(eventID: AptosEventID, event: protos.aptos.transaction.v1.Event, eventIndex: number): AptosEvent {
+    return {
+      id: eventID,
+      sequenceNumber: event.sequenceNumber!,
+      creationNumber: event.key!.creationNumber!,
+      accountAddress: event.key!.accountAddress!,
+      eventIndex,
+      // TODO: for increased efficiency consider only parsing when handler exists
+      data: JSON.parse(event.data!),
+    };
+  }
+}
+
+export abstract class GenericProcessor extends ICoprocessor {
+  protected eventHandlerRegistry: EventHandlerRegistry = new EventHandlerRegistry();
+
+  constructor(chainId: SupportedAptosChainIds) {
+    super(chainId);
+  }
+
+  async processTransactions(params: {
+    transactions: protos.aptos.transaction.v1.Transaction[];
+    startVersion: bigint;
+    endVersion: bigint;
+    dataSource: DataSource;
+  }): Promise<ProcessingResult> {
+    const { filteredTransactions, containedNextStartingVersion } = this.preProcessTransactions(params);
+    for (const transaction of filteredTransactions) {
+      const aptosTx: AptosTransaction = {
+        version: transaction.version!,
+        blockHeight: transaction.blockHeight!,
+        timestamp: transaction.timestamp?.seconds!,
+      };
+
+      const userTransaction = transaction.user!;
+      if (userTransaction === undefined) {
+        throw new Error("TODO: investigate this intermittent issue where 'userTransaction' is undefined");
+      }
+
+      const rawEvents: protos.aptos.transaction.v1.Event[] = userTransaction.events!;
+      for (const rawEventIndex in rawEvents) {
+        const rawEvent = rawEvents[rawEventIndex];
+        await this.eventHandlerRegistry.handleEvent(aptosTx, rawEvent, Number(rawEventIndex), params.dataSource);
+      }
+    }
+    return this.postProcessTransactions({ ...params, containedNextStartingVersion });
+  }
 }

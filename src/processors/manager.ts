@@ -1,17 +1,35 @@
 import { Base, Config, Worker } from "@aptos-labs/aptos-processor-sdk";
 import { DataSource } from "typeorm";
+import { blueBright, green, red, yellow } from "colorette";
 
-import { getNextVersionToProcess } from "../utils/versionControl";
+import { getNextVersionToProcess } from "../common/versionControl";
 
 import { SuperProcessor } from "./super-processor";
 
-import { CoinFlipProcessor } from "./coprocessors";
+import { CoinFlipProcessor, GenericCoinFlipProcessor } from "./coprocessors";
 
-import { IProcessorManager, ICoprocessor } from "./interfaces";
+import { IProcessorManager, ICoprocessor, ISuperProcessor } from "./interfaces";
 import { getSupportedAptosChainId } from "../common/chains";
+import { errorEmitter } from "../errorHandler";
 
 export class ProcessorManager extends IProcessorManager {
   public static async run(_config: Config) {
+    try {
+      ProcessorManager._run(_config);
+    } catch (error) {
+      // NOTE: this catch is only reachable within the context of errors that fail here
+      // Errors thrown in ICoprocessor.processTransactions would not caught here.
+      // Above error can be simply test randomly thrown error in processTransactions
+      ProcessorManager.cleanup();
+    }
+  }
+
+  public static cleanup() {
+    console.warn(yellow("Cleaning up ProcessorManager to allow for a re-try"));
+    ProcessorManager.staleConfig = undefined;
+  }
+
+  private static async _run(_config: Config) {
     if (ProcessorManager.staleConfig) {
       throw new Error("ProcessorManager already being run");
     }
@@ -27,12 +45,10 @@ export class ProcessorManager extends IProcessorManager {
     };
 
     // NOTE: add on coprocessors to this array as the need arises
-    IProcessorManager.coprocessors = [new CoinFlipProcessor(aptosChainId)];
+    IProcessorManager.coprocessors = [new CoinFlipProcessor(aptosChainId), new GenericCoinFlipProcessor(aptosChainId)];
     const allModels: (typeof Base)[] = [];
 
     for (const coprocessor of IProcessorManager.coprocessors) {
-      // TODO: consider singularly loading a dataSource for each coprocessor with only it's models here
-      coprocessor.loadModels();
       allModels.push(...coprocessor.models);
     }
 
@@ -54,7 +70,7 @@ export class ProcessorManager extends IProcessorManager {
     const superProcessorNextVersionToProcess =
       (await getNextVersionToProcess(genericDataSource, superProcessorName)) || SuperProcessor.genesisVersion;
 
-    SuperProcessor.initialNextStartingVersion = superProcessorNextVersionToProcess;
+    ISuperProcessor.initialNextStartingVersion = superProcessorNextVersionToProcess;
     IProcessorManager.coprocessors = await ProcessorManager.syncCoprocessorsTo(
       superProcessorNextVersionToProcess,
       SuperProcessor.genesisVersion,
@@ -62,7 +78,7 @@ export class ProcessorManager extends IProcessorManager {
       ProcessorManager.coprocessors,
     );
 
-    console.log("synced coprocessors; proceeding with single super stream");
+    console.log(blueBright("synced coprocessors; proceeding with single super stream"));
 
     // at this point all valid coprocessors should be synced with the SuperProcessor
     // up to superProcessorNextVersionToProcess so we can now continue with the SuperProcessor
@@ -102,15 +118,19 @@ export class ProcessorManager extends IProcessorManager {
         // TODO: consider throwing errors for all other console.errors below
         throw new Error(`INVARIANT: coprocessor ${name} coprocessor.models.length === 0`);
       }
-
+      // console.log({
+      //   nextVersionInDB,
+      //   coprocessor_genesisVersion: coprocessor.genesisVersion,
+      //   superProcessorNextVersionToProcess
+      // });
       if (coprocessorNextVersionToProcess === superProcessorNextVersionToProcess) {
-        console.info(`coprocessor ${name} already synced with SuperProcessor`);
+        console.info(green(`coprocessor ${name} already in sync with SuperProcessor`));
         validCoprocessors.push(coprocessor);
         continue;
       }
 
       if (coprocessor.genesisVersion < superProcessorGenesisVersion) {
-        console.error(`coprocessor ${name} genesisVersion is earlier than SuperProcessor genesisVersion`);
+        console.error(red(`coprocessor ${name} genesisVersion is earlier than SuperProcessor genesisVersion`));
         continue;
       }
 
@@ -123,20 +143,29 @@ export class ProcessorManager extends IProcessorManager {
 
       if (coprocessorNextVersionToProcess > superProcessorNextVersionToProcess) {
         console.error(
-          `INVARIANT: coprocessor ${name} coprocessorNextVersionToProcess > superProcessorNextVersionToProcess`,
+          red(`INVARIANT: coprocessor ${name} coprocessorNextVersionToProcess > superProcessorNextVersionToProcess`),
         );
         continue;
       }
 
-      await ProcessorManager.syncCoprocessorTo(coprocessorNextVersionToProcess, coprocessor);
+      const didSucceed = await this.syncCoprocessorTo(coprocessorNextVersionToProcess, coprocessor);
+      if (!didSucceed) {
+        console.error(red(`failed to sync ${name}; unknown reason`));
+        continue;
+      }
       validCoprocessors.push(coprocessor);
     }
 
     return validCoprocessors;
   }
 
-  private static async syncCoprocessorTo(coprocessorNextVersionToProcess: bigint, coprocessor: ICoprocessor) {
+  private static async syncCoprocessorTo(
+    coprocessorNextVersionToProcess: bigint,
+    coprocessor: ICoprocessor,
+  ): Promise<boolean> {
+    const name = coprocessor.name();
     try {
+      console.log(blueBright(`About to sync coprocessor: ${name}`));
       const config = new Config(
         ProcessorManager.coreConfig.chain_id,
         ProcessorManager.coreConfig.grpc_data_stream_endpoint,
@@ -150,16 +179,42 @@ export class ProcessorManager extends IProcessorManager {
         processor: coprocessor,
         models: coprocessor.models,
       });
-      await worker.run();
+
+      // Start the worker without awaiting it
+      worker.run();
+
+      // Wait for the 'syncedToSuper' event
+      const synced = await new Promise<boolean>((resolve, reject) => {
+        const onSynced = () => {
+          console.log(green(`Synced ${name} to SuperProcessor`));
+          resolve(true);
+        };
+
+        // Listen for the 'syncedToSuper' event
+        errorEmitter.once("syncedToSuper", onSynced);
+
+        // Optional: Add a timeout to avoid hanging indefinitely
+        // setTimeout(() => {
+        //   reject(new Error("Timeout waiting for synchronization to complete."));
+        // }, 60000); // 60 seconds
+      });
+
+      return synced;
     } catch (error) {
+      // TODO: given the behaviour requiring the above listener
+      // the following code is basically unreachable; consider removing
       if (error instanceof Error) {
-        if (error.message == ICoprocessor.SYNCED_TO_SUPER_ERROR) {
-          // TODO: consider checking that the coprocessor has indeed synced to SuperProcessor
-          return;
+        if (error.message === ICoprocessor.SYNCED_TO_SUPER_ERROR) {
+          console.log(green(`Synced ${name} to SuperProcessor`));
+          return true;
         }
-        throw error; // Rethrow the unexpected error
+        // Log unexpected errors for debugging
+        console.error(`Unexpected error while syncing ${name}:`, error);
+        throw error; // Rethrow unexpected errors
       } else {
-        throw error; // Rethrow the unexpected error
+        // Handle non-Error exceptions
+        console.error(`Unknown error while syncing ${name}:`, error);
+        throw error; // Rethrow unexpected non-Error objects
       }
     }
   }

@@ -7,6 +7,9 @@ import { ProcessorManager } from "./processors/manager";
 import { getSupportedAptosChainId } from "./common/chains";
 import { GRPC_API_KEYS, GRPC_DATA_STREAM_ENDPOINTS } from "./common/services";
 import { GENESIS_VERSIONS } from "./common/chain-config";
+import { blueBright, green, red, yellowBright } from "colorette";
+import { ICoprocessor } from "./processors/interfaces";
+import { errorEmitter } from "./errorHandler";
 
 // Define the shape of command-line arguments
 type Args = {
@@ -46,13 +49,92 @@ function generateInternalConfig(): Config {
   return new Config(BigInt(aptosChainId), grpcEndpoint, grpcApiKey, BigInt(genesisVersion), dbConnectionUri);
 }
 
+const MAX_RETRIES = 6; // max retries for ProcessorManager.run
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (error: Error) => {
+  if (error.message === ICoprocessor.SYNCED_TO_SUPER_ERROR) {
+    console.log(green(`Synced to SuperProcessor successfully.`));
+    errorEmitter.emit("syncedToSuper"); // Emit the event
+    // Do NOT exit the process
+  } else {
+    console.error(red(`Uncaught Exception: ${error.message}`));
+    errorEmitter.emit("miscError", error); // Emit all other errors
+    // Do NOT exit the process
+  }
+});
+
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (reason: any) => {
+  if (reason instanceof Error) {
+    if (reason.message === ICoprocessor.SYNCED_TO_SUPER_ERROR) {
+      console.log(green(`Synced to SuperProcessor successfully.`));
+      errorEmitter.emit("syncedToSuper"); // Emit the event
+      // Do NOT exit the process
+    } else {
+      console.error(red(`Unhandled Rejection: ${reason.message}`));
+      errorEmitter.emit("miscError", reason); // Emit all other errors
+      // Do NOT exit the process
+    }
+  } else {
+    console.error(red(`Unhandled Rejection: ${reason}`));
+    errorEmitter.emit("miscError", new Error(reason)); // Emit all other rejections
+    // Do NOT exit the process
+  }
+});
+
 /**
- * Main function to start the processor.
+ * Main function to start the processor with retries.
+ * Listens for globally captured errors and retries accordingly.
  * @param {Config} indexerConfig - The configuration to use.
  */
-async function main(indexerConfig: Config) {
-  // NOTE: config "starting_version" should be fixed and remain unchanged for deterministic/replicable continuity
-  await ProcessorManager.run(indexerConfig);
+async function runProcessorWithRetries(indexerConfig: Config) {
+  let retries = 0;
+  let success = false;
+
+  // A promise-based function to listen for emitted errors
+  const errorPromise = () => {
+    return new Promise<void>((resolve, reject) => {
+      // Listen for errors emitted via the errorEmitter
+      errorEmitter.once("miscError", (error: Error) => {
+        console.error(red(`Global error captured: ${error.message}`));
+        reject(error); // Reject the promise to trigger retry
+      });
+
+      // TODO: Is this syncedToSuper listener really needed? Remove if not.
+      // Listen for the 'syncedToSuper' event, which indicates success
+      errorEmitter.once("syncedToSuper", () => {
+        console.log(green(`Synced to SuperProcessor successfully.`));
+        resolve(); // Resolve the promise to indicate success
+      });
+    });
+  };
+
+  while (retries < MAX_RETRIES && !success) {
+    try {
+      console.log(yellowBright(`Attempting to start processor (try ${retries + 1}/${MAX_RETRIES})...`));
+
+      ProcessorManager.cleanup();
+      // Run the ProcessorManager and simultaneously listen for errors
+      await Promise.all([ProcessorManager.run(indexerConfig), errorPromise()]);
+
+      success = true; // If no error, mark as success and break out of the loop
+    } catch (error) {
+      retries += 1;
+
+      if (retries >= MAX_RETRIES) {
+        console.error(red(`Max retries reached (${MAX_RETRIES}). Exiting process.`));
+        process.exit(1); // Exit if retries exceeded
+      } else {
+        console.log(blueBright(`Retrying... (${retries}/${MAX_RETRIES})`));
+        await sleep(3000); // Optional delay before retrying (3 seconds)
+      }
+    }
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Define the "process" command
@@ -93,9 +175,10 @@ program
 
     // Start the main processor
     try {
-      await main(indexerConfig);
+      await runProcessorWithRetries(indexerConfig);
     } catch (error) {
-      console.error(`Failed to start the processor: ${(error as Error).message}`);
+      console.log(red("main error"));
+      console.error(error);
       process.exit(1);
     }
   });
