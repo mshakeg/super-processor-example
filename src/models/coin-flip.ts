@@ -1,8 +1,9 @@
-import { Base } from "@aptos-labs/aptos-processor-sdk";
 import { Entity, PrimaryColumn, Column } from "typeorm";
 
+import { CommonBase } from "./common";
+
 @Entity("coin_flip_events")
-export class CoinFlipEvent extends Base {
+export class CoinFlipEvent extends CommonBase {
   @PrimaryColumn({ type: "bigint" })
   sequenceNumber!: string;
 
@@ -38,4 +39,19 @@ export class CoinFlipEvent extends Base {
 
   @Column({ type: "bigint" })
   eventIndex!: string;
+}
+
+@Entity("coin_flip_stats")
+export class CoinFlipStat extends CommonBase {
+  @Column({ type: "bigint" })
+  totalWins!: string;
+
+  @Column({ type: "bigint" })
+  totalLosses!: string;
+
+  @Column({ type: "numeric", precision: 5, scale: 2 })
+  winPercentage!: number;
+
+  @Column({ type: "timestamp with time zone", default: () => "CURRENT_TIMESTAMP" })
+  lastUpdated!: Date;
 }

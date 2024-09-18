@@ -36,6 +36,9 @@ Run the example:
 
 ```shell
 pnpm start process --config ./config.yaml
+
+# alternatively run with .env config
+pnpm start process
 ```
 
 You may have to start up the postgres db, to do so you can use the `pg:start` script(alternatively use the `docker-compose.yml` to start up postgres and hasura). NOTE: you may have to make the `setup-database.sh` executable, to do so run:

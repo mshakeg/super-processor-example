@@ -4,6 +4,9 @@
     "target": "es2021",
     "module": "commonjs",
     "baseUrl": "./",
+    "paths": {
+      "src/*": ["src/*"]
+    },
     "outDir": "dist",
     "moduleResolution": "node",
     "declaration": true,

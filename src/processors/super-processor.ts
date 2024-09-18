@@ -1,4 +1,4 @@
-import { protos, ProcessingResult, TransactionsProcessor, grpcTimestampToDate } from "@aptos-labs/aptos-processor-sdk";
+import { protos, ProcessingResult } from "@aptos-labs/aptos-processor-sdk";
 
 import { DataSource } from "typeorm";
 

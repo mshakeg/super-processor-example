@@ -7,13 +7,16 @@ import { SuperProcessor } from "./super-processor";
 
 import { CoinFlipProcessor } from "./coprocessors";
 
-import { IProcessorManager, ICoprocessor, CoreConfig } from "./interfaces";
+import { IProcessorManager, ICoprocessor } from "./interfaces";
+import { getSupportedAptosChainId } from "../common/chains";
 
 export class ProcessorManager extends IProcessorManager {
   public static async run(_config: Config) {
     if (ProcessorManager.staleConfig) {
       throw new Error("ProcessorManager already being run");
     }
+
+    const aptosChainId = getSupportedAptosChainId(Number(_config.chain_id));
 
     ProcessorManager.staleConfig = _config;
     ProcessorManager.coreConfig = {
@@ -24,7 +27,7 @@ export class ProcessorManager extends IProcessorManager {
     };
 
     // NOTE: add on coprocessors to this array as the need arises
-    IProcessorManager.coprocessors = [new CoinFlipProcessor()];
+    IProcessorManager.coprocessors = [new CoinFlipProcessor(aptosChainId)];
     const allModels: (typeof Base)[] = [];
 
     for (const coprocessor of IProcessorManager.coprocessors) {
@@ -40,11 +43,12 @@ export class ProcessorManager extends IProcessorManager {
     const staleGenericWorker = new Worker({
       config: ProcessorManager.staleConfig,
       processor: superProcessor,
-      models: allModels, // the dataSource on this worker is generic as it only has the sdk's NextVersionToProcess entity
+      models: allModels, // we include all entities in addition to the sdk's NextVersionToProcess entity
     });
 
     // TODO: Aptos should incorporate the following logic into "@aptos-labs/aptos-processor-sdk"
-    // we get the last processed version if any and use that as the starting_version, instead of re-indexing from SuperProcessor.genesisVersion
+    // we get the last processed version if any and use that as the starting_version
+    // nstead of re-indexing from SuperProcessor.genesisVersion
     const genericDataSource = staleGenericWorker.dataSource;
     await genericDataSource.initialize();
     const superProcessorNextVersionToProcess =
@@ -60,8 +64,8 @@ export class ProcessorManager extends IProcessorManager {
 
     console.log("synced coprocessors; proceeding with single super stream");
 
-    // at this point all valid coprocessors should be synced with the SuperProcessor up to superProcessorNextVersionToProcess
-    // we can now continue with the SuperProcessor
+    // at this point all valid coprocessors should be synced with the SuperProcessor
+    // up to superProcessorNextVersionToProcess so we can now continue with the SuperProcessor
     SuperProcessor.readyToSuperProcess();
 
     const superConfig = new Config(

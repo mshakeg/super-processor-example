@@ -2,76 +2,61 @@ import { protos, ProcessingResult } from "@aptos-labs/aptos-processor-sdk";
 
 import { DataSource } from "typeorm";
 
-import { ICoprocessor, ISuperProcessor } from "../interfaces";
+import { ICoprocessor } from "../interfaces";
 
-import { CoinFlipEvent } from "../../models/coin-flip";
+import { CoinFlipEvent, CoinFlipStat } from "../../models/coin-flip";
+import { SupportedAptosChainIds } from "../../common/chains";
 
-// TODO: make this network configurable
-// might require making the chain_id part of the model/entity primary key
-// if we want to be able to run multiple networks on the same DB
-// the genesisVersion would also have to be network configurable
-const COIN_FLIP_MODULE_PUBLISHER = "0xe57752173bc7c57e9b61c84895a75e53cd7c0ef0855acd81d31cb39b0e87e1d0";
+interface ChainConfig {
+  modulePublisher: string;
+  genesisVersion: bigint;
+}
+
+const CHAIN_CONFIGS: Partial<Record<SupportedAptosChainIds, ChainConfig>> = {
+  [SupportedAptosChainIds.APTOS_TESTNET]: {
+    modulePublisher: "0xe57752173bc7c57e9b61c84895a75e53cd7c0ef0855acd81d31cb39b0e87e1d0",
+    genesisVersion: 635_567_537n,
+  },
+};
 
 export class CoinFlipProcessor extends ICoprocessor {
-  // NOTE: this should be fixed and remain unchanged
-  name(): string {
-    return "coin_flip_processor";
+  private COIN_FLIP_MODULE_PUBLISHER: string;
+  public genesisVersion: bigint;
+
+  constructor(chainId: SupportedAptosChainIds) {
+    super(chainId);
+    const config = CHAIN_CONFIGS[chainId];
+    if (!config) {
+      throw new Error(`Unsupported chain ID: ${chainId}`);
+    }
+    this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
+    this.genesisVersion = config.genesisVersion;
   }
 
-  // NOTE: this should be fixed and remain unchanged for deterministic/replicable continuity
-  public genesisVersion: bigint = 635_567_537n;
+  // NOTE: this should be fixed and remain unchanged
+  name(): string {
+    return `${this.chainId}_coin_flip_processor`;
+  }
 
-  async processTransactions({
-    transactions,
-    startVersion,
-    endVersion,
-    dataSource,
-  }: {
+  async processTransactions(params: {
     transactions: protos.aptos.transaction.v1.Transaction[];
     startVersion: bigint;
     endVersion: bigint;
-    dataSource: DataSource; // DB connection
+    dataSource: DataSource;
   }): Promise<ProcessingResult> {
     // TODO: not essential but for additional dev safety load a dataSource with only the models for the coprocessor
     // instead of using the SuperProcessor's dataSource that has all models across all coprocessors
-
-    const actuallySuperProcessing = ISuperProcessor.actuallySuperProcessing;
-    console.log("coprocessor:", this.name(), actuallySuperProcessing);
     // TODO: consider early returning if [start,end] before genesisVersion for efficiency
     // However not essential since there'd be no events relevant to the coprocessor
+    const { startVersion, endVersion, dataSource } = params;
 
-    if (!actuallySuperProcessing) {
-      // we need to ensure that if we reach ISuperProcessor.initialNextStartingVersion that we stop
-      // we also need to ensure that we do NOT exceed ISuperProcessor.initialNextStartingVersion
-      if (startVersion === ISuperProcessor.initialNextStartingVersion) {
-        throw new Error(ICoprocessor.SYNCED_TO_SUPER_ERROR);
-      }
-
-      if (startVersion > ISuperProcessor.initialNextStartingVersion) {
-        throw new Error("FATAL: this is not expected to ever occur");
-      }
-    }
-
-    let filteredTransactions: protos.aptos.transaction.v1.Transaction[] = [];
-    let containedNextStartingVersion: boolean = false;
-
-    // TODO: encapsulate all logic that is common to Coprocessors in preProcessTransactions and a postProcessTransactions functions
-    if (actuallySuperProcessing) {
-      // since SuperProcessor filtered to keep only user txs
-      filteredTransactions = transactions;
-    } else {
-      const {
-        filteredTransactions: _filteredTransactions,
-        containedNextStartingVersion: _containedNextStartingVersion,
-      } = this.filterTransactions(transactions, ISuperProcessor.initialNextStartingVersion);
-
-      filteredTransactions = _filteredTransactions;
-      containedNextStartingVersion = _containedNextStartingVersion;
-    }
+    const { filteredTransactions, containedNextStartingVersion } = this.preProcessTransactions(params);
 
     const eventDbObjs: CoinFlipEvent[] = [];
+    let totalWins = BigInt(0);
+    let totalLosses = BigInt(0);
 
-    for (const transaction of transactions) {
+    for (const transaction of filteredTransactions) {
       const transactionVersion = transaction.version!.toString();
       const transactionBlockHeight = transaction.blockHeight!.toString();
       const transactionTimestamp = new Date(
@@ -80,11 +65,7 @@ export class CoinFlipProcessor extends ICoprocessor {
       const userTransaction = transaction.user!;
 
       if (userTransaction === undefined) {
-        console.warn("TODO: investigate this intermittent issue where 'userTransaction' is undefined");
-      }
-
-      if (userTransaction.events === undefined) {
-        console.warn("TODO: investigate this intermittent issue where 'events' is undefined");
+        throw new Error("TODO: investigate this intermittent issue where 'userTransaction' is undefined");
       }
 
       userTransaction.events?.forEach((event, eventIndex) => {
@@ -92,10 +73,15 @@ export class CoinFlipProcessor extends ICoprocessor {
           return;
         }
 
-        // TODO: add typesafety for events
+        // TODO: add typesafety for events, while in this CoinFlipProcessor we're only dealing with the
+        // CoinFlipEvent in a specific coin_flip module, it's possible for another ICoprocessor to deal with different events
+        // across a single module or possibly multiple modules. Given this possibility this CoinFlipProcessor which serves as an example ICoprocessor
+        // should be developed in a generic way to demonstrate how developers can implement a custom ICoprocessor is a highly maintainble type way manner.
+
         // TODO: add a switch case for the different events being handled
-        // with a similar devX to subgraph handler development; use https://www.npmjs.com/package/mikro-orm
-        // to work efficiently with a batch of events/transactions that may CRUD to the same DB records
+        // with a similar dev experience to a subgraph handler development, however importantly it should
+        // work efficiently with a batch of events/transactions that may CRUD to the same DB records
+        // instead of doing the CRUD operations for each event/tx one at a time, do them all in a batch.
 
         const creationNumber = event.key!.creationNumber!.toString();
         const accountAddress = event.key!.accountAddress!;
@@ -110,6 +96,7 @@ export class CoinFlipProcessor extends ICoprocessor {
         const winPercentage = Number(wins) / (Number(wins) + Number(losses));
 
         const eventDbObj = new CoinFlipEvent();
+        eventDbObj.chainId = this.chainId;
         eventDbObj.sequenceNumber = sequenceNumber;
         eventDbObj.creationNumber = creationNumber;
         eventDbObj.accountAddress = accountAddress;
@@ -123,10 +110,18 @@ export class CoinFlipProcessor extends ICoprocessor {
         eventDbObj.eventIndex = eventIndex.toString();
 
         eventDbObjs.push(eventDbObj);
+
+        // accumulate total wins/losses for current tx batch/stream accordingly
+        if (prediction === result) {
+          totalWins++;
+        } else {
+          totalLosses++;
+        }
       });
     }
 
-    // Insert events into the DB.
+    // TODO: consider only updating DB if any thing to update
+    // Insert events and update stats in the DB
     await dataSource.transaction(async (txnManager) => {
       // Insert in chunks of 100 at a time to deal with this issue:
       // https://stackoverflow.com/q/66906294/3846032
@@ -135,23 +130,34 @@ export class CoinFlipProcessor extends ICoprocessor {
         const chunk = eventDbObjs.slice(i, i + chunkSize);
         await txnManager.insert(CoinFlipEvent, chunk);
       }
+
+      // Update global stats
+      const statsRepository = txnManager.getRepository(CoinFlipStat);
+      let stats = await statsRepository.findOne({ where: { chainId: this.chainId } });
+
+      if (!stats) {
+        stats = new CoinFlipStat();
+        stats.chainId = this.chainId;
+        stats.totalWins = "0";
+        stats.totalLosses = "0";
+      }
+
+      stats.totalWins = (BigInt(stats.totalWins) + totalWins).toString();
+      stats.totalLosses = (BigInt(stats.totalLosses) + totalLosses).toString();
+      stats.winPercentage = Number(stats.totalWins) / (Number(stats.totalWins) + Number(stats.totalLosses));
+      stats.lastUpdated = new Date();
+
+      await statsRepository.save(stats);
     });
 
-    const actualEndVersion = containedNextStartingVersion
-      ? ISuperProcessor.initialNextStartingVersion - 1n
-      : endVersion;
-
-    // if actuallySuperProcessing we have to save checkpoint directly in coprocessor
-    // as only the SuperProcessor worker is active, not each Coprocessor's
-    await this.createNextVersionToProcess(dataSource, actualEndVersion);
-    return this.result(startVersion, actualEndVersion);
+    return this.postProcessTransactions({ startVersion, endVersion, dataSource, containedNextStartingVersion });
   }
 
   private includedEventType(eventType: string): boolean {
     const [moduleAddress, moduleName, eventName] = eventType.split("::");
     const standardizedModuleAddress = `0x${moduleAddress.slice(2).padStart(64, "0")}`;
     return (
-      standardizedModuleAddress === COIN_FLIP_MODULE_PUBLISHER &&
+      standardizedModuleAddress === this.COIN_FLIP_MODULE_PUBLISHER &&
       moduleName === "coin_flip" &&
       eventName === "CoinFlipEvent"
     );
@@ -159,7 +165,7 @@ export class CoinFlipProcessor extends ICoprocessor {
 
   public loadModels() {
     if (this.models.length === 0) {
-      this.models = [CoinFlipEvent];
+      this.models = [CoinFlipEvent, CoinFlipStat];
     }
   }
 }
