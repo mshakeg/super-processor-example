@@ -10,6 +10,7 @@ import { GENESIS_VERSIONS } from "./common/chain-config";
 import { blueBright, green, red, yellowBright } from "colorette";
 import { ICoprocessor } from "./processors/interfaces";
 import { errorEmitter } from "./errorHandler";
+import { getTypeormPostgresDbConnectionUri } from "./common/connection";
 
 // Define the shape of command-line arguments
 type Args = {
@@ -18,7 +19,7 @@ type Args = {
 };
 
 // Destructure environment variables with default values if necessary
-const { CHAIN_ID, DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_NAME } = process.env;
+const { CHAIN_ID } = process.env;
 
 /**
  * Generates internal Config from environment variables and internal constants.
@@ -26,8 +27,8 @@ const { CHAIN_ID, DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_NAME } = proces
  * @throws Will throw an error if essential environment variables or constants are missing.
  */
 function generateInternalConfig(): Config {
-  if (!CHAIN_ID || !DB_HOST || !DB_PORT || !DB_USERNAME || !DB_PASSWORD || !DB_NAME) {
-    throw new Error("One or more required environment variables are missing.");
+  if (!CHAIN_ID) {
+    throw new Error("CHAIN_ID is not defined");
   }
 
   const aptosChainId = getSupportedAptosChainId(Number(CHAIN_ID));
@@ -38,15 +39,15 @@ function generateInternalConfig(): Config {
     throw new Error("GRPC_API_KEY for CHAIN_ID is not defined");
   }
 
-  const dbConnectionUri = `postgresql://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`;
+  const typeormDbConnectionUri = getTypeormPostgresDbConnectionUri();
 
   const genesisVersion = GENESIS_VERSIONS[aptosChainId];
 
-  if (!genesisVersion) {
+  if (genesisVersion === undefined) {
     throw new Error("GENESIS_VERSIONS for CHAIN_ID is not defined");
   }
 
-  return new Config(BigInt(aptosChainId), grpcEndpoint, grpcApiKey, BigInt(genesisVersion), dbConnectionUri);
+  return new Config(BigInt(aptosChainId), grpcEndpoint, grpcApiKey, BigInt(genesisVersion), typeormDbConnectionUri);
 }
 
 const MAX_RETRIES = 6; // max retries for ProcessorManager.run
@@ -54,7 +55,7 @@ const MAX_RETRIES = 6; // max retries for ProcessorManager.run
 // Handle uncaught exceptions
 process.on("uncaughtException", (error: Error) => {
   if (error.message === ICoprocessor.SYNCED_TO_SUPER_ERROR) {
-    console.log(green(`Synced to SuperProcessor successfully.`));
+    console.log(green("Synced to SuperProcessor successfully."));
     errorEmitter.emit("syncedToSuper"); // Emit the event
     // Do NOT exit the process
   } else {
@@ -68,7 +69,7 @@ process.on("uncaughtException", (error: Error) => {
 process.on("unhandledRejection", (reason: any) => {
   if (reason instanceof Error) {
     if (reason.message === ICoprocessor.SYNCED_TO_SUPER_ERROR) {
-      console.log(green(`Synced to SuperProcessor successfully.`));
+      console.log(green("Synced to SuperProcessor successfully."));
       errorEmitter.emit("syncedToSuper"); // Emit the event
       // Do NOT exit the process
     } else {
@@ -104,7 +105,7 @@ async function runProcessorWithRetries(indexerConfig: Config) {
       // TODO: Is this syncedToSuper listener really needed? Remove if not.
       // Listen for the 'syncedToSuper' event, which indicates success
       errorEmitter.once("syncedToSuper", () => {
-        console.log(green(`Synced to SuperProcessor successfully.`));
+        console.log(green("Synced to SuperProcessor successfully."));
         resolve(); // Resolve the promise to indicate success
       });
     });

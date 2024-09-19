@@ -4,7 +4,7 @@ import { DataSource } from "typeorm";
 
 import { ICoprocessor } from "../interfaces";
 
-import { CoinFlipEvent, CoinFlipStat } from "../../models/coin-flip";
+import { CoinFlipEvent, CoinFlipStat } from "../../models/typeorm/coin-flip";
 import { SupportedAptosChainIds } from "../../common/chains";
 import { CHAIN_CONFIGS } from "./config";
 
@@ -16,11 +16,11 @@ export class CoinFlipProcessor extends ICoprocessor {
     super(chainId);
     const config = CHAIN_CONFIGS[chainId];
     if (!config) {
-      throw new Error(`Unsupported chain ID: ${chainId}`);
+      throw new Error(`${this.name()} unsupported on chain: ${chainId}`);
     }
     this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
     this.genesisVersion = config.genesisVersion;
-    this.models = [CoinFlipEvent, CoinFlipStat];
+    this.typeormModels = [CoinFlipEvent, CoinFlipStat];
   }
 
   // NOTE: this should be fixed and remain unchanged
@@ -62,11 +62,6 @@ export class CoinFlipProcessor extends ICoprocessor {
         if (!this.includedEventType(event.typeStr!)) {
           return;
         }
-
-        // TODO: add typesafety for events, while in this CoinFlipProcessor we're only dealing with the
-        // CoinFlipEvent in a specific coin_flip module, it's possible for another ICoprocessor to deal with different events
-        // across a single module or possibly multiple modules. Given this possibility this CoinFlipProcessor which serves as an example ICoprocessor
-        // should be developed in a generic way to demonstrate how developers can implement a custom ICoprocessor is a highly maintainble type way manner.
 
         // TODO: add a switch case for the different events being handled
         // with a similar dev experience to a subgraph handler development, however importantly it should

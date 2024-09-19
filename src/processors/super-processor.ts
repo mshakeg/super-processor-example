@@ -3,10 +3,15 @@ import { protos, ProcessingResult } from "@aptos-labs/aptos-processor-sdk";
 import { DataSource } from "typeorm";
 
 import { IProcessorManager, ISuperProcessor } from "./interfaces";
+import { SupportedAptosChainIds } from "../common/chains";
 
 export class SuperProcessor extends ISuperProcessor {
+  constructor(chainId: SupportedAptosChainIds) {
+    super(chainId);
+  }
+
   name(): string {
-    return "super_processor";
+    return `${this.chainId}_super_processor`;
   }
 
   async processTransactions({

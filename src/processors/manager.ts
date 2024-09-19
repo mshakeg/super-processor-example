@@ -6,11 +6,12 @@ import { getNextVersionToProcess } from "../common/versionControl";
 
 import { SuperProcessor } from "./super-processor";
 
-import { CoinFlipProcessor, GenericCoinFlipProcessor } from "./coprocessors";
+import { CoinFlipProcessor, GenericCoinFlipProcessor, GenericCoinFlipProcessorUoW } from "./coprocessors";
 
 import { IProcessorManager, ICoprocessor, ISuperProcessor } from "./interfaces";
 import { getSupportedAptosChainId } from "../common/chains";
 import { errorEmitter } from "../errorHandler";
+import { getMikroORM } from "../models/mikro-orm/mikro-orm.config";
 
 export class ProcessorManager extends IProcessorManager {
   public static async run(_config: Config) {
@@ -44,22 +45,28 @@ export class ProcessorManager extends IProcessorManager {
       db_connection_uri: _config.db_connection_uri,
     };
 
+    const orm = await getMikroORM();
+
     // NOTE: add on coprocessors to this array as the need arises
-    IProcessorManager.coprocessors = [new CoinFlipProcessor(aptosChainId), new GenericCoinFlipProcessor(aptosChainId)];
-    const allModels: (typeof Base)[] = [];
+    IProcessorManager.coprocessors = [
+      new CoinFlipProcessor(aptosChainId),
+      new GenericCoinFlipProcessor(aptosChainId),
+      new GenericCoinFlipProcessorUoW(aptosChainId, orm),
+    ];
+    const allTypeormModels: (typeof Base)[] = [];
 
     for (const coprocessor of IProcessorManager.coprocessors) {
-      allModels.push(...coprocessor.models);
+      allTypeormModels.push(...coprocessor.typeormModels);
     }
 
-    const superProcessor = new SuperProcessor();
+    const superProcessor = new SuperProcessor(aptosChainId);
     const superProcessorName = superProcessor.name();
     SuperProcessor.genesisVersion = ProcessorManager.staleConfig.starting_version;
 
     const staleGenericWorker = new Worker({
       config: ProcessorManager.staleConfig,
       processor: superProcessor,
-      models: allModels, // we include all entities in addition to the sdk's NextVersionToProcess entity
+      models: allTypeormModels, // we include all entities in addition to the sdk's NextVersionToProcess entity
     });
 
     // TODO: Aptos should incorporate the following logic into "@aptos-labs/aptos-processor-sdk"
@@ -95,7 +102,7 @@ export class ProcessorManager extends IProcessorManager {
     const superWorker = new Worker({
       config: superConfig,
       processor: superProcessor,
-      models: allModels,
+      models: allTypeormModels,
     });
     await superWorker.run();
   }
@@ -108,21 +115,22 @@ export class ProcessorManager extends IProcessorManager {
   ): Promise<ICoprocessor[]> {
     const validCoprocessors: ICoprocessor[] = [];
 
+    console.log({ superProcessorNextVersionToProcess });
+
     for (const coprocessor of coprocessors) {
       const name = coprocessor.name();
 
       const nextVersionInDB = await getNextVersionToProcess(genericDataSource, name);
       const coprocessorNextVersionToProcess = nextVersionInDB || coprocessor.genesisVersion;
 
-      if (coprocessor.models.length === 0) {
+      if (coprocessor.typeormModels.length === 0 && coprocessor.mikroormModels.length === 0) {
         // TODO: consider throwing errors for all other console.errors below
         throw new Error(`INVARIANT: coprocessor ${name} coprocessor.models.length === 0`);
       }
-      // console.log({
-      //   nextVersionInDB,
-      //   coprocessor_genesisVersion: coprocessor.genesisVersion,
-      //   superProcessorNextVersionToProcess
-      // });
+      console.log({
+        nextVersionInDB,
+        coprocessor_genesisVersion: coprocessor.genesisVersion,
+      });
       if (coprocessorNextVersionToProcess === superProcessorNextVersionToProcess) {
         console.info(green(`coprocessor ${name} already in sync with SuperProcessor`));
         validCoprocessors.push(coprocessor);
@@ -177,7 +185,7 @@ export class ProcessorManager extends IProcessorManager {
       const worker = new Worker({
         config,
         processor: coprocessor,
-        models: coprocessor.models,
+        models: coprocessor.typeormModels,
       });
 
       // Start the worker without awaiting it

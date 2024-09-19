@@ -1,7 +1,8 @@
 import { DataSource } from "typeorm";
+import { EntityManager, MikroORM } from "@mikro-orm/core";
 import {
   protos,
-  Base,
+  Base as AptosTypeormBase,
   Config,
   createNextVersionToProcess,
   TransactionsProcessor,
@@ -11,7 +12,15 @@ import {
 
 import { SupportedAptosChainIds } from "../common/chains";
 
+import { Base as MikroOrmBase } from "../models/mikro-orm/common";
+
 export abstract class ISuperProcessor extends TransactionsProcessor {
+  public readonly chainId: SupportedAptosChainIds;
+  constructor(chainId: SupportedAptosChainIds) {
+    super();
+    this.chainId = chainId;
+  }
+
   public static initialNextStartingVersion = 0n;
 
   public static actuallySuperProcessing = false;
@@ -48,7 +57,9 @@ export abstract class ICoprocessor extends TransactionsProcessor {
 
   // TODO: consider adding a terminationVersion; where txs beyond are no longer indexed.
 
-  public models: (typeof Base)[] = [];
+  // NOTE: exactly 1 Array should be filled
+  public typeormModels: (typeof AptosTypeormBase)[] = [];
+  public mikroormModels: (typeof MikroOrmBase)[] = [];
 
   // IMPORTANT NOTE: if a coprocessor is using the SuperProcessor's stream then the must update the nextVersionToProcess
   // so that if the service were to be restarted it would be able to discern next version to process for any coprocessor
@@ -199,13 +210,45 @@ export interface AptosEvent {
   data: BaseEventData;
 }
 
+abstract class EventHandlerRegistryBase {
+  protected getEventID(rawEvent: protos.aptos.transaction.v1.Event): AptosEventID {
+    const [moduleAddress, moduleName, eventName] = rawEvent.typeStr!.split("::");
+    const standardizedModuleAddress = `0x${moduleAddress.slice(2).padStart(64, "0")}`;
+    return {
+      moduleAddress: standardizedModuleAddress,
+      moduleName,
+      eventName,
+    };
+  }
+
+  protected getEventKey(eventID: AptosEventID): string {
+    return `${eventID.moduleAddress}::${eventID.moduleName}::${eventID.eventName}`;
+  }
+
+  protected parseEvent(
+    eventID: AptosEventID,
+    event: protos.aptos.transaction.v1.Event,
+    eventIndex: number,
+  ): AptosEvent {
+    return {
+      id: eventID,
+      sequenceNumber: event.sequenceNumber!,
+      creationNumber: event.key!.creationNumber!,
+      accountAddress: event.key!.accountAddress!,
+      eventIndex,
+      // TODO: for increased efficiency consider only parsing when handler exists
+      data: JSON.parse(event.data!),
+    };
+  }
+}
+
 type EventHandler<T extends AptosEvent = AptosEvent> = (
   aptosTx: AptosTransaction,
   event: T,
   dataSource: DataSource,
 ) => Promise<void>;
 
-class EventHandlerRegistry {
+class EventHandlerRegistry extends EventHandlerRegistryBase {
   private handlers: Map<string, EventHandler<AptosEvent>> = new Map();
 
   registerHandler<T extends AptosEvent>(eventID: AptosEventID, handler: EventHandler<T>) {
@@ -229,32 +272,6 @@ class EventHandlerRegistry {
     }
     // NOTE: logging on every event that does not have an event handler would be too verbose
   }
-
-  private getEventID(rawEvent: protos.aptos.transaction.v1.Event): AptosEventID {
-    const [moduleAddress, moduleName, eventName] = rawEvent.typeStr!.split("::");
-    const standardizedModuleAddress = `0x${moduleAddress.slice(2).padStart(64, "0")}`;
-    return {
-      moduleAddress: standardizedModuleAddress,
-      moduleName,
-      eventName,
-    };
-  }
-
-  private getEventKey(eventID: AptosEventID): string {
-    return `${eventID.moduleAddress}::${eventID.moduleName}::${eventID.eventName}`;
-  }
-
-  private parseEvent(eventID: AptosEventID, event: protos.aptos.transaction.v1.Event, eventIndex: number): AptosEvent {
-    return {
-      id: eventID,
-      sequenceNumber: event.sequenceNumber!,
-      creationNumber: event.key!.creationNumber!,
-      accountAddress: event.key!.accountAddress!,
-      eventIndex,
-      // TODO: for increased efficiency consider only parsing when handler exists
-      data: JSON.parse(event.data!),
-    };
-  }
 }
 
 export abstract class GenericProcessor extends ICoprocessor {
@@ -275,7 +292,7 @@ export abstract class GenericProcessor extends ICoprocessor {
       const aptosTx: AptosTransaction = {
         version: transaction.version!,
         blockHeight: transaction.blockHeight!,
-        timestamp: transaction.timestamp?.seconds!,
+        timestamp: transaction.timestamp!.seconds!,
       };
 
       const userTransaction = transaction.user!;
@@ -291,4 +308,80 @@ export abstract class GenericProcessor extends ICoprocessor {
     }
     return this.postProcessTransactions({ ...params, containedNextStartingVersion });
   }
+}
+
+// - - - UoW using mikro-orm - - -
+
+type EventHandlerUoW<T extends AptosEvent = AptosEvent> = (
+  aptosTx: AptosTransaction,
+  event: T,
+  em: EntityManager,
+) => Promise<void>;
+
+class EventHandlerRegistryUoW extends EventHandlerRegistryBase {
+  private handlers: Map<string, EventHandlerUoW<AptosEvent>> = new Map();
+
+  registerHandler<T extends AptosEvent>(eventID: AptosEventID, handler: EventHandlerUoW<T>) {
+    const key = this.getEventKey(eventID);
+    this.handlers.set(key, handler as EventHandlerUoW<AptosEvent>);
+  }
+
+  async handleEvent(
+    aptosTx: AptosTransaction,
+    rawEvent: protos.aptos.transaction.v1.Event,
+    eventIndex: number,
+    em: EntityManager,
+  ): Promise<void> {
+    const eventID = this.getEventID(rawEvent);
+    const eventKey = this.getEventKey(eventID);
+    const handler = this.handlers.get(eventKey);
+    if (handler) {
+      const aptosEvent = this.parseEvent(eventID, rawEvent, eventIndex);
+      await handler(aptosTx, aptosEvent, em);
+    }
+  }
+}
+
+export abstract class GenericProcessorUoW extends ICoprocessor {
+  protected eventHandlerRegistry: EventHandlerRegistryUoW = new EventHandlerRegistryUoW();
+  protected orm: MikroORM;
+
+  constructor(chainId: SupportedAptosChainIds, orm: MikroORM) {
+    super(chainId);
+    this.orm = orm;
+  }
+
+  async processTransactions(params: {
+    transactions: protos.aptos.transaction.v1.Transaction[];
+    startVersion: bigint;
+    endVersion: bigint;
+    dataSource: DataSource;
+  }): Promise<ProcessingResult> {
+    const { filteredTransactions, containedNextStartingVersion } = this.preProcessTransactions(params);
+
+    const em = this.orm.em.fork();
+
+    for (const transaction of filteredTransactions) {
+      const aptosTx: AptosTransaction = {
+        version: transaction.version!,
+        blockHeight: transaction.blockHeight!,
+        timestamp: transaction.timestamp!.seconds!,
+      };
+
+      const userTransaction = transaction.user!;
+      const rawEvents: protos.aptos.transaction.v1.Event[] = userTransaction.events!;
+
+      for (const rawEventIndex in rawEvents) {
+        const rawEvent = rawEvents[rawEventIndex];
+        await this.eventHandlerRegistry.handleEvent(aptosTx, rawEvent, Number(rawEventIndex), em);
+      }
+    }
+
+    // Flush all changes to the database at once
+    await em.flush();
+
+    return this.postProcessTransactions({ ...params, containedNextStartingVersion });
+  }
+
+  protected abstract registerEventHandlers(): void;
 }

@@ -23,6 +23,8 @@
   },
   "dependencies": {
     "@aptos-labs/aptos-processor-sdk": "=0.2.0",
+    "@mikro-orm/core": "^6.3.10",
+    "@mikro-orm/postgresql": "^6.3.10",
     "colorette": "^2.0.20",
     "commander": "^11.0.0",
     "dotenv": "^16.4.5",

@@ -10,7 +10,29 @@ This super indexer example demonstrates how the above can be achieved. It works 
 
 The above is basically all that's required by the developer. The `ProcessorManager` will then sync a `ICoprocessor` up to the version that the `SuperProcessor` is synced if it hasn't already, and once all are synced it will then use the `SuperProcessor` stream to service all coprocessors in lock step.
 
-NOTE: developers can create a custom coprocessor that extends the `GenericProcessor`(which in turn extends the `ICoprocessor`) for a more subgraph like developer experience where developers simply have to specify the specific module events they want to handle, and then simply implement handler functions for those specified module events. See the `GenericCoinFlipProcessor` in `./src/processors/coprocessors/generic-coin-flip.ts` for an example of this. `GenericCoinFlipProcessor` is equivalent to `CoinFlipProcessor` regarding the data that is effectively indexed and aggregated. However for use cases/dApps where high throughput performance is critical then developers should probably implement a coprocessor that extends `ICoprocessor` directly as this more easily allows for simple and efficient batching over many events present in a batch of `transactions` passed to `processTransactions`. `GenericProcessor` could be improved in future to more easily enable batching and efficient DB IO using a Unit of Work pattern across all events(and across all event handlers) present in a batch of `transactions` passed to `processTransactions`.
+NOTE: developers can create a custom coprocessor that extends the `GenericProcessor`(which in turn extends the `ICoprocessor`) for a more subgraph like developer experience where developers simply have to specify the specific module events they want to handle, and then simply implement handler functions for those specified module events. See the `GenericCoinFlipProcessor` in `./src/processors/coprocessors/generic-coin-flip.ts` for an example of this. `GenericCoinFlipProcessor` is equivalent to `CoinFlipProcessor` regarding the data that is effectively indexed and aggregated.
+
+NOTE: Developers can create custom coprocessors by extending either `GenericProcessor` or `GenericProcessorUoW`, both of which extend `ICoprocessor`. Both provide a similar subgraph-like developer experience, allowing developers to specify the module events they want to handle and implement handler functions for those events. See `GenericCoinFlipProcessorUoW` in `./src/processors/coprocessors/generic-coin-flip-uow.ts` for an example.
+
+PERFORMANCE CONSIDERATIONS:
+
+1. `GenericProcessorUoW` (Recommended generally but especially for High Throughput):
+   - Utilizes MikroORM with the Unit of Work pattern.
+   - Batches database operations across all events in a transaction batch.
+   - Significantly reduces database round-trips, improving performance for high-throughput scenarios.
+   - Provides better memory management and transaction handling.
+
+2. `GenericProcessor`:
+   - Uses TypeORM for database operations.
+   - Simpler to set up but may have lower performance for high-volume data processing.
+   - Suitable for lower-throughput scenarios or rapid prototyping.
+
+3. Direct `ICoprocessor` Extension:
+   - For advanced use cases requiring custom optimizations.
+   - Allows for manual implementation of batching and efficient database I/O.
+   - Recommended when `GenericProcessorUoW` doesn't meet specific performance requirements.
+
+Choose the appropriate base class based on your performance needs and familiarity with the ORMs. For most high-performance use cases, `GenericProcessorUoW` is recommended. If you need further optimizations, consider extending `ICoprocessor` directly and implementing custom batching logic.
 
 ## Prerequisites
 

@@ -1,5 +1,5 @@
 import { DataSource } from "typeorm";
-import { GenericCoinFlipEvent, GenericCoinFlipStat } from "../../models/generic-coin-flip";
+import { GenericCoinFlipEvent, GenericCoinFlipStat } from "../../models/typeorm/generic-coin-flip";
 import { GenericProcessor, AptosEventID, AptosTransaction } from "../interfaces";
 import { SupportedAptosChainIds } from "../../common/chains";
 import { CHAIN_CONFIGS, CoinFlipEvent } from "./config";
@@ -12,11 +12,11 @@ export class GenericCoinFlipProcessor extends GenericProcessor {
     super(chainId);
     const config = CHAIN_CONFIGS[chainId];
     if (!config) {
-      throw new Error(`Unsupported chain ID: ${chainId}`);
+      throw new Error(`${this.name()} unsupported on chain: ${chainId}`);
     }
     this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
     this.genesisVersion = config.genesisVersion;
-    this.models = [GenericCoinFlipEvent, GenericCoinFlipStat];
+    this.typeormModels = [GenericCoinFlipEvent, GenericCoinFlipStat];
 
     // register all event handlers
     const CoinFlipEventID: AptosEventID = {
