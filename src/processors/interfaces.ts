@@ -320,10 +320,31 @@ type EventHandlerUoW<T extends AptosEvent = AptosEvent> = (
 
 class EventHandlerRegistryUoW extends EventHandlerRegistryBase {
   private handlers: Map<string, EventHandlerUoW<AptosEvent>> = new Map();
+  private registeredEvents: Record<string, AptosEventID> = {};
+  private registeredEventIDs: AptosEventID[] = [];
 
   registerHandler<T extends AptosEvent>(eventID: AptosEventID, handler: EventHandlerUoW<T>) {
-    const key = this.getEventKey(eventID);
-    this.handlers.set(key, handler as EventHandlerUoW<AptosEvent>);
+    const eventKey = this.getEventKey(eventID);
+    const alreadyRegistered = this.registeredEvents[eventKey] !== undefined;
+    if (alreadyRegistered) {
+      throw new Error(`EventID already registered: ${eventKey}`);
+    }
+    this.handlers.set(eventKey, handler as EventHandlerUoW<AptosEvent>);
+    this.registeredEvents[eventKey] = eventID;
+    this.registeredEventIDs.push(eventID);
+  }
+
+  public getHandler(eventID: AptosEventID) {
+    const eventKey = this.getEventKey(eventID);
+    return this.handlers.get(eventKey);
+  }
+
+  public getRegisteredEventID(registrationIndex: number): AptosEventID {
+    const length = this.registeredEventIDs.length;
+    if (registrationIndex >= length) {
+      throw new Error(`Invalid registrationIndex: ${registrationIndex}; length: ${length}`);
+    }
+    return this.registeredEventIDs[registrationIndex];
   }
 
   async handleEvent(
@@ -340,6 +361,16 @@ class EventHandlerRegistryUoW extends EventHandlerRegistryBase {
       await handler(aptosTx, aptosEvent, em);
     }
   }
+}
+
+function TestOnly(target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  const originalMethod = descriptor.value;
+  descriptor.value = function (...args: any[]) {
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error(`${propertyKey} is only available in test environment`);
+    }
+    return originalMethod.apply(this, args);
+  };
 }
 
 export abstract class GenericProcessorUoW extends ICoprocessor {
@@ -384,4 +415,24 @@ export abstract class GenericProcessorUoW extends ICoprocessor {
   }
 
   protected abstract registerEventHandlers(): void;
+
+  @TestOnly
+  public async callEventHandler(
+    eventID: AptosEventID,
+    aptosTx: AptosTransaction,
+    event: AptosEvent,
+    em: EntityManager,
+  ): Promise<void> {
+    const handler = this.eventHandlerRegistry.getHandler(eventID);
+    if (handler) {
+      await handler(aptosTx, event, em);
+    } else {
+      throw new Error(`No handler registered for event: ${JSON.stringify(eventID)}`);
+    }
+  }
+
+  @TestOnly
+  public getRegisteredEventID(registrationIndex: number): AptosEventID {
+    return this.eventHandlerRegistry.getRegisteredEventID(registrationIndex);
+  }
 }

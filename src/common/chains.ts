@@ -1,4 +1,5 @@
 export enum SupportedAptosChainIds {
+  JESTNET = 0, // used for jest testing
   APTOS_MAINNET = 1,
   APTOS_TESTNET = 2,
   APTOS_DEVNET = 148,

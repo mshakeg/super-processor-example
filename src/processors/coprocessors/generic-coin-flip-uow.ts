@@ -39,14 +39,14 @@ export class GenericCoinFlipProcessorUoW extends GenericProcessorUoW {
     const coinFlipEvent = em.create(GenericCoinFlipEvent, {
       chainId: this.chainId,
       accountAddress: event.accountAddress,
-      sequenceNumber: event.sequenceNumber.toString(),
-      creationNumber: event.creationNumber.toString(),
-      transactionVersion: aptosTx.version.toString(),
+      sequenceNumber: event.sequenceNumber,
+      creationNumber: event.creationNumber,
+      transactionVersion: aptosTx.version,
       transactionTimestamp: new Date(Number(aptosTx.timestamp * 1000n)),
       prediction,
       result,
-      wins,
-      losses,
+      wins: BigInt(wins),
+      losses: BigInt(losses),
       winPercentage: Number(wins) / (Number(wins) + Number(losses)),
       eventIndex: event.eventIndex.toString(),
     });
@@ -56,8 +56,8 @@ export class GenericCoinFlipProcessorUoW extends GenericProcessorUoW {
     if (!coinFlipStat) {
       coinFlipStat = em.create(GenericCoinFlipStat, {
         chainId: this.chainId,
-        totalWins: "0",
-        totalLosses: "0",
+        totalWins: 0n,
+        totalLosses: 0n,
         winPercentage: 0, // Default to 0
         lastUpdated: new Date(), // Set to current date
       });
@@ -65,8 +65,8 @@ export class GenericCoinFlipProcessorUoW extends GenericProcessorUoW {
 
     const didWin = prediction === result;
 
-    coinFlipStat.totalWins = (BigInt(coinFlipStat.totalWins) + (didWin ? 1n : 0n)).toString();
-    coinFlipStat.totalLosses = (BigInt(coinFlipStat.totalLosses) + (didWin ? 0n : 1n)).toString();
+    coinFlipStat.totalWins = coinFlipStat.totalWins + (didWin ? 1n : 0n);
+    coinFlipStat.totalLosses = coinFlipStat.totalLosses + (didWin ? 0n : 1n);
     coinFlipStat.winPercentage =
       Number(coinFlipStat.totalWins) / (Number(coinFlipStat.totalWins) + Number(coinFlipStat.totalLosses));
     coinFlipStat.lastUpdated = new Date();

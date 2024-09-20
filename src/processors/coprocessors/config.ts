@@ -11,6 +11,11 @@ export const CHAIN_CONFIGS: Partial<Record<SupportedAptosChainIds, CoinFlipConfi
     modulePublisher: "0xe57752173bc7c57e9b61c84895a75e53cd7c0ef0855acd81d31cb39b0e87e1d0",
     genesisVersion: 635_567_537n,
   },
+  [SupportedAptosChainIds.JESTNET]: {
+    // for local testing purposes
+    modulePublisher: "0xe57752173bc7c57e9b61c84895a75e53cd7c0ef0855acd81d31cb39b0e87e1d0",
+    genesisVersion: 635_567_537n,
+  },
 };
 
 interface CoinFlipEventData extends BaseEventData {
