@@ -6,22 +6,18 @@ import { CHAIN_CONFIGS, CoinFlipEvent } from "./config";
 
 export class GenericCoinFlipProcessorUoW extends GenericProcessorUoW {
   private readonly COIN_FLIP_MODULE_PUBLISHER: string;
-  public readonly genesisVersion: bigint;
 
   constructor(chainId: SupportedAptosChainIds, orm: MikroORM) {
-    super(chainId, orm);
     const config = CHAIN_CONFIGS[chainId];
+    const baseName = "generic_coin_flip_processor_uow";
     if (!config) {
-      throw new Error(`${this.name()} unsupported on chain: ${chainId}`);
+      const name = GenericProcessorUoW.constructName(chainId, baseName);
+      throw new Error(`${name} unsupported on chain: ${chainId}`);
     }
+    super(chainId, config.genesisVersion, baseName, orm);
     this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
-    this.genesisVersion = config.genesisVersion;
     this.mikroormModels = [GenericCoinFlipEvent, GenericCoinFlipStat];
     this.registerEventHandlers();
-  }
-
-  name(): string {
-    return `${this.chainId}_generic_coin_flip_processor_uow`;
   }
 
   protected registerEventHandlers(): void {
@@ -30,7 +26,7 @@ export class GenericCoinFlipProcessorUoW extends GenericProcessorUoW {
       moduleName: "coin_flip",
       eventName: "CoinFlipEvent",
     };
-    this.eventHandlerRegistry.registerHandler(CoinFlipEventID, this.handleCoinFlipEvent.bind(this));
+    this.eventHandlerRegistry.registerHandler<CoinFlipEvent>(CoinFlipEventID, this.handleCoinFlipEvent.bind(this));
   }
 
   private async handleCoinFlipEvent(aptosTx: AptosTransaction, event: CoinFlipEvent, em: EntityManager): Promise<void> {

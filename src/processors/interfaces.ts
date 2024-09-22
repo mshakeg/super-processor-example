@@ -42,9 +42,21 @@ export abstract class ICoprocessor extends TransactionsProcessor {
 
   public readonly chainId: SupportedAptosChainIds;
 
-  constructor(chainId: SupportedAptosChainIds) {
+  public readonly baseName: string; // name excluding chainId prefix
+
+  constructor(chainId: SupportedAptosChainIds, genesisVersion: bigint, baseName: string) {
     super();
     this.chainId = chainId;
+    this.genesisVersion = genesisVersion;
+    this.baseName = baseName;
+  }
+
+  name(): string {
+    return `${this.chainId}_${this.baseName}`;
+  }
+
+  public static constructName(chainId: SupportedAptosChainIds, baseName: string): string {
+    return `${chainId}_${baseName}`;
   }
 
   // validation on genesisVersion:
@@ -53,7 +65,7 @@ export abstract class ICoprocessor extends TransactionsProcessor {
   // then we want to index up to initialNextStartingVersion
   // in processTransactions if endVersion < genesisVersion, then early return
   // since it's before where we want to start indexing.
-  public genesisVersion = -1n;
+  public readonly genesisVersion: bigint;
 
   // TODO: consider adding a terminationVersion; where txs beyond are no longer indexed.
 
@@ -277,8 +289,8 @@ class EventHandlerRegistry extends EventHandlerRegistryBase {
 export abstract class GenericProcessor extends ICoprocessor {
   protected eventHandlerRegistry: EventHandlerRegistry = new EventHandlerRegistry();
 
-  constructor(chainId: SupportedAptosChainIds) {
-    super(chainId);
+  constructor(chainId: SupportedAptosChainIds, genesisVersion: bigint, baseName: string) {
+    super(chainId, genesisVersion, baseName);
   }
 
   async processTransactions(params: {
@@ -308,6 +320,8 @@ export abstract class GenericProcessor extends ICoprocessor {
     }
     return this.postProcessTransactions({ ...params, containedNextStartingVersion });
   }
+
+  protected abstract registerEventHandlers(): void;
 }
 
 // - - - UoW using mikro-orm - - -
@@ -377,8 +391,8 @@ export abstract class GenericProcessorUoW extends ICoprocessor {
   protected eventHandlerRegistry: EventHandlerRegistryUoW = new EventHandlerRegistryUoW();
   protected orm: MikroORM;
 
-  constructor(chainId: SupportedAptosChainIds, orm: MikroORM) {
-    super(chainId);
+  constructor(chainId: SupportedAptosChainIds, genesisVersion: bigint, baseName: string, orm: MikroORM) {
+    super(chainId, genesisVersion, baseName);
     this.orm = orm;
   }
 

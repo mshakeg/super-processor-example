@@ -10,22 +10,17 @@ import { CHAIN_CONFIGS } from "./config";
 
 export class CoinFlipProcessor extends ICoprocessor {
   private COIN_FLIP_MODULE_PUBLISHER: string;
-  public genesisVersion: bigint;
 
   constructor(chainId: SupportedAptosChainIds) {
-    super(chainId);
     const config = CHAIN_CONFIGS[chainId];
+    const baseName = "coin_flip_processor";
     if (!config) {
-      throw new Error(`${this.name()} unsupported on chain: ${chainId}`);
+      const name = ICoprocessor.constructName(chainId, baseName);
+      throw new Error(`${name} unsupported on chain: ${chainId}`);
     }
+    super(chainId, config?.genesisVersion, baseName);
     this.COIN_FLIP_MODULE_PUBLISHER = config.modulePublisher;
-    this.genesisVersion = config.genesisVersion;
     this.typeormModels = [CoinFlipEvent, CoinFlipStat];
-  }
-
-  // NOTE: this should be fixed and remain unchanged
-  name(): string {
-    return `${this.chainId}_coin_flip_processor`;
   }
 
   async processTransactions(params: {
